@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>炸金花</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--card-bg:#111118;--border:rgba(255,255,255,.07);
+  --green:#1a4a1a;--green2:#1e5c1e;--felt:#166016;
+  --gold:#f5c842;--red:#e03c3c;--text:#e8e8f0;--sub:#666;
+  --accent:#ff3c6e;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:'Microsoft YaHei','PingFang SC',sans-serif;overflow:hidden}
+
+/* ── LOBBY ─────────────────────────────────────────────── */
+#lobby{
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:16px;
+  background:radial-gradient(ellipse 70% 60% at 50% 40%,
+    rgba(26,74,26,.4) 0%,var(--bg) 100%);
+  z-index:100;
+}
+#lobby h1{
+  font-size:3.2rem;font-weight:900;letter-spacing:8px;
+  background:linear-gradient(135deg,#f5c842,#ff8c00,#f5c842);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;text-shadow:none;margin-bottom:8px;
+}
+#lobby p{color:var(--sub);font-size:.9rem;margin-bottom:8px;}
+.lobby-form{
+  background:rgba(255,255,255,.04);border:1px solid var(--border);
+  border-radius:20px;padding:32px;width:min(340px,calc(100vw - 32px));display:flex;
+  flex-direction:column;gap:14px;
+}
+.lobby-form input{
+  background:rgba(255,255,255,.06);border:1.5px solid var(--border);
+  border-radius:10px;padding:12px 16px;color:var(--text);font-size:1rem;
+  outline:none;transition:border-color .2s;
+}
+.lobby-form input:focus{border-color:rgba(245,200,66,.5);}
+.lobby-form input::placeholder{color:var(--sub);}
+.btn-gold{
+  background:linear-gradient(135deg,#c8960c,#f5c842,#c8960c);
+  color:#1a0f00;border:none;padding:13px;border-radius:10px;
+  font-size:1rem;font-weight:800;cursor:pointer;
+  transition:transform .2s,box-shadow .2s;
+  box-shadow:0 4px 20px rgba(245,200,66,.3);
+}
+.btn-gold:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(245,200,66,.4);}
+.lobby-tips{font-size:.78rem;color:var(--sub);text-align:center;line-height:1.8;}
+#lobby-err{color:var(--accent);font-size:.85rem;min-height:18px;text-align:center;}
+#share-link{font-size:.75rem;color:#555;text-align:center;}
+#share-link a{color:#888;text-decoration:none;}
+
+/* ── GAME LAYOUT ──────────────────────────────────────── */
+#game{
+  display:none;height:100vh;
+  grid-template-rows:48px 1fr 180px;
+  grid-template-columns:1fr 260px;
+  grid-template-areas:"hdr hdr""table log""actions log";
+}
+#game.visible{display:grid;}
+
+/* ── HEADER ───────────────────────────────────────────── */
+#hdr{
+  grid-area:hdr;
+  background:rgba(0,0,0,.5);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 20px;gap:16px;
+}
+#hdr .logo{
+  font-weight:900;font-size:1.1rem;letter-spacing:3px;
+  background:linear-gradient(90deg,#f5c842,#ff8c00);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+#hdr .room-info{font-size:.8rem;color:var(--sub);}
+#hdr .room-info b{color:#aaa;}
+#hdr-pot{margin-left:auto;font-size:.9rem;color:var(--gold);font-weight:700;}
+#hdr-bet{font-size:.8rem;color:var(--sub);}
+
+/* ── TABLE ────────────────────────────────────────────── */
+#table-area{
+  grid-area:table;position:relative;overflow:hidden;
+  background:radial-gradient(ellipse 90% 80% at 50% 50%,
+    #1a4020 0%,#0f2810 60%,#080f08 100%);
+}
+/* Felt texture */
+#table-area::before{
+  content:'';position:absolute;inset:0;
+  background:repeating-linear-gradient(
+    45deg,transparent,transparent 2px,
+    rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px);
+  pointer-events:none;
+}
+/* Oval border */
+#felt{
+  position:absolute;
+  top:10%;left:12%;right:12%;bottom:10%;
+  border:3px solid rgba(139,90,43,.5);
+  border-radius:50%;
+  box-shadow:inset 0 0 60px rgba(0,0,0,.4),0 0 40px rgba(0,0,0,.6);
+}
+
+/* Center info */
+#center-info{
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  text-align:center;pointer-events:none;
+}
+#center-pot{
+  font-size:1.4rem;font-weight:900;color:var(--gold);
+  text-shadow:0 2px 8px rgba(0,0,0,.8);
+}
+#center-label{font-size:.7rem;color:rgba(255,255,255,.3);letter-spacing:2px;margin-top:2px;}
+#status-msg{
+  margin-top:8px;font-size:.82rem;color:rgba(255,255,255,.5);
+  max-width:180px;text-align:center;
+}
+
+/* ── PLAYER SLOTS ─────────────────────────────────────── */
+.player-slot{
+  position:absolute;transform:translate(-50%,-50%);
+  width:130px;text-align:center;
+  transition:all .3s;
+}
+.player-slot.is-me{width:150px;}
+
+.p-avatar{
+  width:44px;height:44px;border-radius:50%;
+  background:linear-gradient(135deg,#1a3a1a,#2a5a2a);
+  border:2px solid rgba(255,255,255,.15);
+  display:flex;align-items:center;justify-content:center;
+  margin:0 auto 6px;font-size:.95rem;font-weight:800;
+  color:rgba(255,255,255,.8);transition:border-color .3s,box-shadow .3s;
+}
+.player-slot.active-turn .p-avatar{
+  border-color:var(--gold);
+  box-shadow:0 0 16px rgba(245,200,66,.6);
+  animation:pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse{
+  0%,100%{box-shadow:0 0 10px rgba(245,200,66,.4);}
+  50%{box-shadow:0 0 22px rgba(245,200,66,.8);}
+}
+.player-slot.folded .p-avatar{
+  filter:grayscale(1);opacity:.4;
+  border-color:rgba(255,255,255,.1)!important;
+}
+.player-slot.is-me .p-avatar{
+  width:52px;height:52px;font-size:1.1rem;
+  border-color:rgba(100,200,100,.4);
+  background:linear-gradient(135deg,#0d2e0d,#1a4a1a);
+}
+
+.p-name{
+  font-size:.78rem;font-weight:700;color:#ddd;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.player-slot.active-turn .p-name{color:var(--gold);}
+.p-chips{font-size:.72rem;color:var(--sub);margin-top:1px;}
+.p-chips b{color:#aaa;}
+.p-state-tag{
+  display:inline-block;font-size:.65rem;padding:1px 7px;
+  border-radius:10px;margin-top:3px;font-weight:700;
+}
+.p-state-tag.blind{background:rgba(100,100,255,.2);color:#99f;}
+.p-state-tag.looking{background:rgba(100,255,100,.2);color:#9f9;}
+.p-state-tag.folded{background:rgba(255,60,60,.2);color:#f99;}
+.p-state-tag.allin{background:rgba(255,165,0,.2);color:#fc0;}
+
+.p-cards{
+  display:flex;gap:4px;justify-content:center;margin-top:6px;
+  flex-wrap:nowrap;
+}
+
+/* ── CARD ─────────────────────────────────────────────── */
+.card{
+  width:36px;height:52px;border-radius:5px;
+  background:white;border:1px solid #ccc;
+  display:flex;flex-direction:column;justify-content:space-between;
+  padding:2px 3px;font-size:11px;font-weight:800;
+  box-shadow:1px 2px 4px rgba(0,0,0,.5);
+  position:relative;
+}
+.card.red{color:#d00;}
+.card.black{color:#111;}
+.card .top{line-height:1;}
+.card .mid{
+  font-size:16px;text-align:center;margin:auto;
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+}
+.card .bot{line-height:1;transform:rotate(180deg);align-self:flex-end;}
+.card.back{
+  background:repeating-linear-gradient(
+    45deg,#1a1a4a,#1a1a4a 3px,#12124a 3px,#12124a 6px);
+  border:1px solid #2a2a6a;
+}
+.card.back .top,.card.back .mid,.card.back .bot{display:none;}
+.card.large{
+  width:52px;height:74px;font-size:14px;border-radius:7px;
+}
+.card.large .mid{font-size:22px;}
+
+/* My hand display */
+#my-hand{
+  display:flex;gap:6px;justify-content:center;
+  margin-top:8px;
+}
+
+.p-hand-type{
+  font-size:.7rem;color:var(--gold);font-weight:700;
+  margin-top:3px;
+}
+
+/* Compare target highlight */
+.player-slot.compare-target{
+  cursor:pointer;
+}
+.player-slot.compare-target .p-avatar{
+  border-color:#ff3c6e!important;
+  box-shadow:0 0 16px rgba(255,60,110,.6)!important;
+  animation:none!important;
+}
+.player-slot.compare-target:hover .p-avatar{
+  background:rgba(255,60,110,.3)!important;
+}
+
+/* ── LOG PANEL ────────────────────────────────────────── */
+#log-panel{
+  grid-area:log;
+  background:rgba(0,0,0,.4);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;
+}
+#log-title{
+  padding:10px 14px;font-size:.75rem;color:var(--sub);
+  letter-spacing:2px;border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+#log-list{
+  flex:1;overflow-y:auto;padding:10px;
+  display:flex;flex-direction:column;gap:4px;
+}
+#log-list::-webkit-scrollbar{width:3px;}
+#log-list::-webkit-scrollbar-track{background:transparent;}
+#log-list::-webkit-scrollbar-thumb{background:#333;}
+.log-entry{font-size:.75rem;line-height:1.5;padding:3px 6px;border-radius:4px;}
+.log-entry.sys{color:#555;}
+.log-entry.bet{color:#9cf;}
+.log-entry.fold{color:#f99;}
+.log-entry.look{color:#9f9;}
+.log-entry.cmp{color:var(--gold);}
+.log-entry.win{color:#f5c842;font-weight:700;background:rgba(245,200,66,.08);}
+.log-entry.chat{color:#ccc;}
+#chat-row{
+  display:flex;gap:6px;padding:8px;
+  border-top:1px solid var(--border);flex-shrink:0;
+}
+#chat-input{
+  flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);
+  border-radius:6px;padding:6px 10px;color:var(--text);
+  font-size:.8rem;outline:none;
+}
+#chat-input::placeholder{color:#444;}
+#chat-send{
+  background:rgba(255,255,255,.08);border:1px solid var(--border);
+  color:#aaa;padding:6px 12px;border-radius:6px;font-size:.75rem;
+  cursor:pointer;
+}
+#chat-send:hover{background:rgba(255,255,255,.12);}
+
+/* ── ACTIONS PANEL ─────────────────────────────────────── */
+#actions{
+  grid-area:actions;
+  background:rgba(0,0,0,.6);border-top:1px solid var(--border);
+  padding:14px 20px;display:flex;align-items:center;gap:14px;
+}
+#action-status{
+  font-size:.85rem;color:var(--sub);flex-shrink:0;min-width:120px;
+}
+#action-status .turn-label{color:var(--gold);font-weight:700;}
+
+#action-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+
+.act-btn{
+  padding:10px 18px;border-radius:8px;font-size:.88rem;font-weight:700;
+  border:none;cursor:pointer;transition:all .2s;font-family:inherit;
+}
+.act-btn:disabled{opacity:.3;cursor:default;transform:none!important;}
+.act-btn:not(:disabled):hover{transform:translateY(-1px);}
+
+.btn-look{background:rgba(100,200,100,.15);color:#9f9;border:1.5px solid rgba(100,200,100,.3);}
+.btn-look:not(:disabled):hover{background:rgba(100,200,100,.25);}
+.btn-fold{background:rgba(255,60,60,.12);color:#f99;border:1.5px solid rgba(255,60,60,.3);}
+.btn-fold:not(:disabled):hover{background:rgba(255,60,60,.22);}
+.btn-call{background:rgba(100,150,255,.15);color:#aaf;border:1.5px solid rgba(100,150,255,.3);}
+.btn-call:not(:disabled):hover{background:rgba(100,150,255,.25);}
+.btn-raise{
+  background:linear-gradient(135deg,rgba(200,150,10,.2),rgba(245,200,66,.15));
+  color:var(--gold);border:1.5px solid rgba(245,200,66,.35);
+}
+.btn-raise:not(:disabled):hover{background:rgba(245,200,66,.25);}
+.btn-compare{background:rgba(255,60,110,.15);color:#faa;border:1.5px solid rgba(255,60,110,.4);}
+.btn-compare:not(:disabled):hover{background:rgba(255,60,110,.25);}
+.btn-compare.selecting{
+  background:rgba(255,60,110,.3);color:#fff;
+  animation:pulse2 .8s ease-in-out infinite;
+}
+@keyframes pulse2{0%,100%{box-shadow:0 0 0 rgba(255,60,110,.4);}50%{box-shadow:0 0 12px rgba(255,60,110,.6);}}
+
+.raise-row{display:flex;align-items:center;gap:6px;}
+.raise-row label{font-size:.75rem;color:var(--sub);}
+#raise-input{
+  width:70px;background:rgba(255,255,255,.08);border:1px solid var(--border);
+  border-radius:6px;padding:6px 8px;color:var(--text);font-size:.85rem;
+  outline:none;text-align:center;
+}
+
+/* Waiting room */
+#waiting-panel{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;
+  background:rgba(0,0,0,.5);z-index:10;
+}
+#waiting-panel h2{font-size:1.2rem;color:var(--gold);}
+#player-list-wait{
+  display:flex;flex-direction:column;gap:6px;min-width:220px;
+}
+.wait-player{
+  background:rgba(255,255,255,.05);border:1px solid var(--border);
+  border-radius:8px;padding:8px 14px;font-size:.85rem;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.wait-host-tag{font-size:.7rem;color:var(--gold);}
+#btn-start{
+  background:linear-gradient(135deg,#c8960c,#f5c842);color:#1a0f00;
+  border:none;padding:12px 36px;border-radius:10px;
+  font-size:1rem;font-weight:800;cursor:pointer;
+  box-shadow:0 4px 20px rgba(245,200,66,.3);transition:all .2s;
+}
+#btn-start:hover{transform:translateY(-2px);}
+#btn-start:disabled{opacity:.4;cursor:default;transform:none;}
+#wait-hint{font-size:.8rem;color:var(--sub);}
+
+/* Toast */
+#toast{
+  position:fixed;bottom:24px;left:50%;
+  transform:translateX(-50%) translateY(60px);
+  background:#222;border:1px solid #444;color:#eee;
+  padding:10px 22px;border-radius:20px;font-size:.85rem;
+  z-index:999;transition:transform .3s ease;pointer-events:none;
+}
+#toast.show{transform:translateX(-50%) translateY(0);}
+
+/* Winner overlay */
+#winner-overlay{
+  position:absolute;inset:0;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(0,0,0,.65);z-index:20;pointer-events:none;
+}
+#winner-overlay.show{display:flex;}
+#winner-box{
+  text-align:center;
+  animation:pop .4s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes pop{from{transform:scale(0.6);opacity:0}to{transform:scale(1);opacity:1}}
+#winner-box .w-label{font-size:.9rem;color:var(--sub);margin-bottom:4px;}
+#winner-box .w-name{
+  font-size:2.4rem;font-weight:900;color:var(--gold);
+  text-shadow:0 0 30px rgba(245,200,66,.6);
+}
+#winner-box .w-detail{font-size:.9rem;color:#aaa;margin-top:6px;}
+#winner-box .coins{font-size:2rem;margin-top:10px;}
+
+/* ── LOG DRAWER (mobile) ───────────────────────────────── */
+#log-toggle{
+  display:none;
+  background:rgba(255,255,255,.08);border:1px solid var(--border);
+  color:#aaa;padding:5px 10px;border-radius:6px;font-size:.75rem;
+  cursor:pointer;margin-left:auto;white-space:nowrap;flex-shrink:0;
+}
+#log-drawer{
+  display:none;position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,.85);flex-direction:column;
+}
+#log-drawer.open{display:flex;}
+#log-drawer-inner{
+  margin-top:auto;background:#0f0f18;border-top:1px solid var(--border);
+  border-radius:16px 16px 0 0;height:60vh;display:flex;flex-direction:column;
+}
+#log-drawer-hdr{
+  padding:14px 16px 10px;display:flex;justify-content:space-between;
+  align-items:center;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+#log-drawer-hdr span{font-size:.85rem;font-weight:700;color:#aaa;}
+#log-drawer-close{
+  background:rgba(255,255,255,.08);border:1px solid var(--border);
+  color:#aaa;padding:5px 14px;border-radius:6px;font-size:.8rem;cursor:pointer;
+}
+#log-drawer-list{
+  flex:1;overflow-y:auto;padding:10px 14px;
+  display:flex;flex-direction:column;gap:4px;
+}
+#log-drawer-list::-webkit-scrollbar{width:3px;}
+#log-drawer-list::-webkit-scrollbar-thumb{background:#333;}
+#log-drawer-chat{
+  display:flex;gap:8px;padding:10px 14px 16px;
+  border-top:1px solid var(--border);flex-shrink:0;
+}
+#log-drawer-chat input{
+  flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);
+  border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;outline:none;
+}
+#log-drawer-chat button{
+  background:rgba(255,255,255,.08);border:1px solid var(--border);
+  color:#aaa;padding:10px 16px;border-radius:8px;font-size:.8rem;cursor:pointer;
+}
+
+/* ── TABLET ────────────────────────────────────────────── */
+@media(max-width:900px){
+  #game.visible{grid-template-columns:1fr 200px;}
+}
+
+/* ── MOBILE ────────────────────────────────────────────── */
+@media(max-width:640px){
+  /* Lobby */
+  #lobby h1{font-size:2.2rem;letter-spacing:4px;}
+  .lobby-form{padding:20px 18px;border-radius:14px;}
+  .lobby-form input{font-size:16px;padding:13px 14px;} /* 16px prevents iOS zoom */
+  .btn-gold{font-size:16px;padding:14px;}
+
+  /* Game grid — no side log panel */
+  #game.visible{
+    grid-template-rows:44px 1fr auto;
+    grid-template-columns:1fr;
+    grid-template-areas:"hdr""table""actions";
+  }
+  #log-panel{display:none;}
+  #log-toggle{display:block;}
+
+  /* Header */
+  #hdr{padding:0 12px;gap:8px;}
+  #hdr .logo{font-size:.95rem;letter-spacing:2px;}
+  #hdr .room-info{font-size:.7rem;}
+  #hdr-pot{font-size:.78rem;margin-left:0;}
+  #hdr-bet{display:none;}
+
+  /* Table */
+  #felt{top:6%;left:5%;right:5%;bottom:6%;}
+  #center-pot{font-size:1.1rem;}
+  #center-label{font-size:.62rem;}
+  #status-msg{font-size:.74rem;}
+
+  /* Player slots */
+  .player-slot{width:86px;}
+  .player-slot.is-me{width:170px;}
+  .p-avatar{width:34px;height:34px;font-size:.78rem;margin-bottom:3px;}
+  .player-slot.is-me .p-avatar{width:40px;height:40px;}
+  .p-name{font-size:.68rem;}
+  .p-chips{font-size:.62rem;}
+  .p-state-tag{font-size:.58rem;padding:1px 5px;}
+
+  /* Cards — opponents small, self bigger */
+  .card{width:26px;height:38px;font-size:8px;border-radius:3px;padding:1px 2px;}
+  .card .mid{font-size:11px;}
+  .card.large{width:48px;height:68px;font-size:13px;border-radius:6px;}
+  .card.large .mid{font-size:21px;}
+  .p-cards{gap:3px;margin-top:4px;}
+
+  /* Actions panel */
+  #actions{
+    padding:10px 12px 14px;
+    flex-direction:column;align-items:stretch;gap:8px;
+  }
+  #action-status{min-width:unset;}
+  #turn-label{font-size:.82rem;}
+  #min-label{font-size:.68rem;}
+
+  #action-btns{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:7px;
+  }
+  .act-btn{
+    padding:12px 8px;font-size:.82rem;
+    min-height:44px; /* touch target */
+  }
+  .raise-row{grid-column:1/-1;justify-content:center;}
+  .raise-row label{font-size:.75rem;}
+  #raise-input{width:60px;font-size:16px;}
+
+  /* Waiting panel */
+  #player-list-wait{min-width:min(220px,calc(100vw - 64px));}
+  #waiting-panel h2{font-size:1.1rem;}
+  #btn-start{padding:11px 28px;font-size:.95rem;}
+
+  /* Winner */
+  #winner-box .w-name{font-size:2rem;}
+}
+
+/* Very small phones */
+@media(max-width:360px){
+  .player-slot{width:74px;}
+  .player-slot.is-me{width:150px;}
+  .card{width:22px;height:32px;font-size:7px;}
+  .card .mid{font-size:9px;}
+  .card.large{width:42px;height:60px;font-size:12px;}
+  .card.large .mid{font-size:18px;}
+  #action-btns{grid-template-columns:1fr 1fr;}
+  .act-btn{font-size:.76rem;padding:11px 6px;}
+}
+</style>
+</head>
+<body>
+
+<!-- LOBBY -->
+<div id="lobby">
+  <h1>炸金花</h1>
+  <p>经典三张牌游戏 · 支持联机</p>
+  <div class="lobby-form">
+    <input id="inp-name" placeholder="你的昵称" maxlength="12" autocomplete="off">
+    <input id="inp-room" placeholder="房间号（自定义，如 ABC123）" maxlength="6" autocomplete="off"
+           style="text-transform:uppercase">
+    <button class="btn-gold" onclick="doJoin()">加入 / 创建房间</button>
+    <div id="lobby-err"></div>
+    <div class="lobby-tips">
+      · 房间不存在会自动创建<br>
+      · 2–6 人可同时游戏<br>
+      · 房主点击"开始游戏"发牌
+    </div>
+  </div>
+  <div id="share-link"></div>
+</div>
+
+<!-- GAME -->
+<div id="game">
+  <!-- Header -->
+  <div id="hdr">
+    <div class="logo">炸金花</div>
+    <div class="room-info">房间 <b id="hdr-room">-</b></div>
+    <div id="hdr-pot">底池: 0</div>
+    <div id="hdr-bet">当前注: 0</div>
+    <button id="log-toggle" onclick="toggleLogDrawer()">📋 记录</button>
+  </div>
+
+  <!-- Table -->
+  <div id="table-area">
+    <div id="felt"></div>
+    <div id="center-info">
+      <div id="center-pot">0</div>
+      <div id="center-label">POT</div>
+      <div id="status-msg"></div>
+    </div>
+    <div id="players-container"></div>
+
+    <!-- Waiting overlay -->
+    <div id="waiting-panel">
+      <h2>等待玩家加入</h2>
+      <div id="player-list-wait"></div>
+      <button id="btn-start" onclick="sendStart()" disabled>开始游戏</button>
+      <div id="wait-hint">至少2人才能开始</div>
+    </div>
+
+    <!-- Winner overlay -->
+    <div id="winner-overlay">
+      <div id="winner-box">
+        <div class="w-label">本局赢家</div>
+        <div class="w-name" id="w-name">-</div>
+        <div class="w-detail" id="w-detail"></div>
+        <div class="coins">🏆</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div id="actions">
+    <div id="action-status">
+      <div id="turn-label">等待中...</div>
+      <div id="min-label" style="font-size:.72rem;color:#555;margin-top:2px;"></div>
+    </div>
+    <div id="action-btns">
+      <button class="act-btn btn-look"    id="btn-look"    onclick="actLook()">看牌</button>
+      <button class="act-btn btn-fold"    id="btn-fold"    onclick="actFold()">弃牌</button>
+      <button class="act-btn btn-call"    id="btn-call"    onclick="actCall()">跟注</button>
+      <div class="raise-row">
+        <label>加注</label>
+        <input id="raise-input" type="number" value="20" min="1">
+        <button class="act-btn btn-raise" id="btn-raise"   onclick="actRaise()">确认加注</button>
+      </div>
+      <button class="act-btn btn-compare" id="btn-compare" onclick="toggleCompare()">比牌</button>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div id="log-panel">
+    <div id="log-title">GAME LOG</div>
+    <div id="log-list"></div>
+    <div id="chat-row">
+      <input id="chat-input" placeholder="发消息..." maxlength="60"
+             onkeydown="if(event.key==='Enter')sendChat()">
+      <button id="chat-send" onclick="sendChat()">发送</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Mobile log drawer -->
+<div id="log-drawer" onclick="closeLogDrawer(event)">
+  <div id="log-drawer-inner">
+    <div id="log-drawer-hdr">
+      <span>游戏记录</span>
+      <button id="log-drawer-close" onclick="toggleLogDrawer()">关闭</button>
+    </div>
+    <div id="log-drawer-list"></div>
+    <div id="log-drawer-chat">
+      <input id="drawer-chat-input" placeholder="发消息..." maxlength="60"
+             onkeydown="if(event.key==='Enter')sendDrawerChat()">
+      <button onclick="sendDrawerChat()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let myId = null;
+let state = null;
+let comparingMode = false;
+const socket = io();
+
+// Player positions: % from left, % from top, for up to 6 opponents (others besides me)
+// Positions around the oval: top arc
+const POSITIONS = {
+  1:[{x:50,y:18}],
+  2:[{x:32,y:18},{x:68,y:18}],
+  3:[{x:20,y:22},{x:50,y:12},{x:80,y:22}],
+  4:[{x:18,y:32},{x:35,y:12},{x:65,y:12},{x:82,y:32}],
+  5:[{x:16,y:42},{x:20,y:18},{x:50,y:10},{x:80,y:18},{x:84,y:42}],
+};
+
+// ── Socket events ──────────────────────────────────────────────────────────
+socket.on('state', s => { state = s; render(); });
+socket.on('err',   m => toast(m));
+
+// ── Join ───────────────────────────────────────────────────────────────────
+function doJoin() {
+  const name = document.getElementById('inp-name').value.trim();
+  const room = document.getElementById('inp-room').value.trim().toUpperCase();
+  if (!name) { setErr('请输入昵称'); return; }
+  if (!room) { setErr('请输入房间号'); return; }
+  if (!/^[A-Z0-9]{1,6}$/.test(room)) { setErr('房间号只能含大写字母和数字'); return; }
+  socket.emit('join', { name, roomId: room });
+}
+function setErr(m) { document.getElementById('lobby-err').textContent = m; }
+
+document.getElementById('inp-room').addEventListener('input', function(){
+  this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+});
+document.getElementById('inp-name').addEventListener('keydown', e => { if(e.key==='Enter') doJoin(); });
+document.getElementById('inp-room').addEventListener('keydown', e => { if(e.key==='Enter') doJoin(); });
+
+// Get share link
+fetch('/localip').then(r=>r.json()).then(({ip})=>{
+  const port = location.port || 3001;
+  const url = `http://${ip}:${port}`;
+  const el = document.getElementById('share-link');
+  el.innerHTML = `局域网分享链接: <a href="${url}" target="_blank">${url}</a>`;
+}).catch(()=>{});
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render() {
+  if (!state) return;
+  myId = state.myId;
+
+  // Switch screens
+  const inGame = state.gameState === 'PLAYING' || state.gameState === 'ENDED';
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('game').classList.add('visible');
+
+  document.getElementById('hdr-room').textContent = state.roomId;
+  document.getElementById('hdr-pot').textContent = `底池: ${state.pot}`;
+  document.getElementById('hdr-bet').textContent = `当前注: ${state.currentBet}`;
+  document.getElementById('center-pot').textContent = state.pot;
+
+  // Waiting overlay
+  const waiting = state.gameState === 'WAITING';
+  document.getElementById('waiting-panel').style.display = waiting ? 'flex' : 'none';
+
+  if (waiting) {
+    renderWaiting();
+    document.getElementById('winner-overlay').classList.remove('show');
+    return;
+  }
+
+  // Winner overlay
+  if (state.gameState === 'ENDED') {
+    const winner = state.players.find(p => p.state !== 'FOLDED');
+    if (winner) {
+      document.getElementById('w-name').textContent = winner.name;
+      const hand = state.players.find(p=>p.id===winner.id);
+      document.getElementById('w-detail').textContent =
+        hand?.handType ? `手牌：${hand.handType}` : '';
+      document.getElementById('winner-overlay').classList.add('show');
+    }
+  } else {
+    document.getElementById('winner-overlay').classList.remove('show');
+  }
+
+  renderPlayers();
+  renderActions();
+  renderLog();
+}
+
+function renderWaiting() {
+  const me = state.players.find(p=>p.id===myId);
+  const list = document.getElementById('player-list-wait');
+  list.innerHTML = state.players.map(p=>`
+    <div class="wait-player">
+      <span>${p.name}</span>
+      ${p.isHost?'<span class="wait-host-tag">房主</span>':'<span style="color:#555;font-size:.7rem;">玩家</span>'}
+    </div>`).join('');
+
+  const startBtn = document.getElementById('btn-start');
+  startBtn.style.display = me?.isHost ? 'block' : 'none';
+  startBtn.disabled = state.players.length < 2;
+  document.getElementById('wait-hint').textContent =
+    me?.isHost
+      ? (state.players.length < 2 ? '等待更多玩家...' : '可以开始了！')
+      : `等待房主(${state.players.find(p=>p.isHost)?.name||'?'})开始`;
+}
+
+function renderPlayers() {
+  const container = document.getElementById('players-container');
+  container.innerHTML = '';
+
+  const others = state.players.filter(p => p.id !== myId);
+  const me = state.players.find(p => p.id === myId);
+  const positions = POSITIONS[Math.min(others.length, 5)] || [];
+
+  // Render other players
+  others.forEach((p, i) => {
+    const pos = positions[i] || { x:50, y:20 };
+    const slot = makePlayerSlot(p, false, pos, i);
+    container.appendChild(slot);
+  });
+
+  // Render self at bottom center
+  if (me) {
+    const selfSlot = makePlayerSlot(me, true, { x:50, y:83 }, -1);
+    container.appendChild(selfSlot);
+  }
+}
+
+function makePlayerSlot(p, isMe, pos, idx) {
+  const isCur = p.id === state.curId;
+  const isFolded = p.state === 'FOLDED';
+  const div = document.createElement('div');
+  div.className = 'player-slot' +
+    (isMe ? ' is-me' : '') +
+    (isCur ? ' active-turn' : '') +
+    (isFolded ? ' folded' : '');
+  div.style.left = pos.x + '%';
+  div.style.top  = pos.y + '%';
+  div.dataset.pid = p.id;
+
+  // Compare mode: clickable opponents
+  if (comparingMode && !isMe && !isFolded) {
+    div.classList.add('compare-target');
+    div.onclick = () => doCompare(p.id);
+  }
+
+  const stateTag = isFolded ? '<span class="p-state-tag folded">弃牌</span>'
+    : p.state === 'ALLIN' ? '<span class="p-state-tag allin">全押</span>'
+    : p.isLooking ? '<span class="p-state-tag looking">看牌</span>'
+    : '<span class="p-state-tag blind">蒙牌</span>';
+
+  const handLabel = (isMe && p.isLooking && p.handType) || (p.revealed && p.handType)
+    ? `<div class="p-hand-type">${p.handType}</div>` : '';
+
+  const betStr = p.totalBet > 0 ? `下注 ${p.totalBet}` : '';
+
+  div.innerHTML = `
+    <div class="p-avatar">${p.name.charAt(0).toUpperCase()}</div>
+    <div class="p-name">${p.name}${isCur&&!isFolded?'<span style="color:var(--gold);margin-left:4px;">▶</span>':''}</div>
+    <div class="p-chips">💰 <b>${p.chips}</b>${betStr?` · ${betStr}`:''}</div>
+    ${stateTag}
+    <div class="p-cards">${renderCards(p, isMe)}</div>
+    ${handLabel}
+  `;
+  return div;
+}
+
+function renderCards(p, isMe) {
+  if (!p.cards) {
+    // Unknown cards (other player, not revealed)
+    return '<div class="card back"></div>'.repeat(3);
+  }
+  return p.cards.map(c => {
+    const cls = c.red ? 'red' : 'black';
+    const size = isMe ? ' large' : '';
+    return `<div class="card ${cls}${size}">
+      <div class="top">${c.label}</div>
+      <div class="mid">${c.s}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderActions() {
+  const me = state.players.find(p=>p.id===myId);
+  const isMyTurn = state.curId === myId;
+  const minPay = me?.isLooking ? state.currentBet : Math.ceil(state.currentBet/2);
+
+  document.getElementById('btn-look').style.display   = (!me?.isLooking) ? '' : 'none';
+  document.getElementById('btn-compare').style.display = me?.isLooking ? '' : 'none';
+
+  const disabled = !isMyTurn || me?.state !== 'ACTIVE';
+  ['btn-look','btn-fold','btn-call','btn-raise','btn-compare'].forEach(id => {
+    const el = document.getElementById(id);
+    el.disabled = disabled || state.gameState !== 'PLAYING';
+  });
+
+  document.getElementById('raise-input').disabled = disabled || state.gameState !== 'PLAYING';
+
+  if (!isMyTurn) {
+    const cur = state.players.find(p=>p.id===state.curId);
+    document.getElementById('turn-label').innerHTML =
+      `<span style="color:#666">等待 </span><span class="turn-label">${cur?.name||'?'}</span>`;
+    document.getElementById('min-label').textContent = '';
+  } else {
+    document.getElementById('turn-label').innerHTML =
+      `<span class="turn-label">你的回合</span>`;
+    const stateStr = me?.isLooking ? '已看牌' : '蒙牌';
+    document.getElementById('min-label').textContent =
+      `${stateStr} · 跟注需 ${minPay} · 你有 ${me?.chips||0}`;
+  }
+
+  // Raise input min
+  const ri = document.getElementById('raise-input');
+  ri.min = minPay;
+  if (parseInt(ri.value) < minPay) ri.value = minPay;
+
+  // Compare btn state
+  const cmpBtn = document.getElementById('btn-compare');
+  if (comparingMode) {
+    cmpBtn.textContent = '取消比牌';
+    cmpBtn.classList.add('selecting');
+    document.getElementById('status-msg').textContent = '点击对手发起比牌';
+  } else {
+    cmpBtn.textContent = '比牌';
+    cmpBtn.classList.remove('selecting');
+    document.getElementById('status-msg').textContent = '';
+  }
+}
+
+function renderLog() {
+  const list = document.getElementById('log-list');
+  const wasAtBottom = list.scrollHeight - list.clientHeight <= list.scrollTop + 10;
+  const html = (state.log||[]).map(e =>
+    `<div class="log-entry ${e.type}">${e.text}</div>`
+  ).join('');
+  list.innerHTML = html;
+  if (wasAtBottom) list.scrollTop = list.scrollHeight;
+  // sync mobile drawer if open
+  if (document.getElementById('log-drawer').classList.contains('open')) {
+    const dl = document.getElementById('log-drawer-list');
+    const atBottom = dl.scrollHeight - dl.clientHeight <= dl.scrollTop + 10;
+    dl.innerHTML = html;
+    if (atBottom) dl.scrollTop = dl.scrollHeight;
+  }
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+function actLook()  { socket.emit('action',{type:'look'}); }
+function actFold()  { if(confirm('确定弃牌？')) socket.emit('action',{type:'fold'}); }
+function actCall()  {
+  const me = state?.players.find(p=>p.id===myId);
+  const minPay = me?.isLooking ? state.currentBet : Math.ceil(state.currentBet/2);
+  socket.emit('action',{type:'bet',payload:{amount:minPay}});
+}
+function actRaise() {
+  const amt = parseInt(document.getElementById('raise-input').value)||0;
+  socket.emit('action',{type:'bet',payload:{amount:amt}});
+}
+function toggleCompare() {
+  comparingMode = !comparingMode;
+  renderActions();
+  renderPlayers(); // re-render to add/remove click handlers
+}
+function doCompare(targetId) {
+  comparingMode = false;
+  socket.emit('action',{type:'compare',payload:{targetId}});
+}
+function sendStart() { socket.emit('start'); }
+function sendChat()  {
+  const inp = document.getElementById('chat-input');
+  const t = inp.value.trim();
+  if (!t) return;
+  socket.emit('chat', t);
+  inp.value = '';
+}
+document.getElementById('chat-input')
+  .addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
+
+// ── Mobile log drawer ─────────────────────────────────────────────────────
+function toggleLogDrawer() {
+  document.getElementById('log-drawer').classList.toggle('open');
+  if (document.getElementById('log-drawer').classList.contains('open')) {
+    renderDrawerLog();
+    const dl = document.getElementById('log-drawer-list');
+    dl.scrollTop = dl.scrollHeight;
+  }
+}
+function closeLogDrawer(e) {
+  if (e.target === document.getElementById('log-drawer')) toggleLogDrawer();
+}
+function renderDrawerLog() {
+  const list = document.getElementById('log-drawer-list');
+  list.innerHTML = (state?.log||[]).map(e =>
+    `<div class="log-entry ${e.type}">${e.text}</div>`
+  ).join('');
+}
+function sendDrawerChat() {
+  const inp = document.getElementById('drawer-chat-input');
+  const t = inp.value.trim();
+  if (!t) return;
+  socket.emit('chat', t);
+  inp.value = '';
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
